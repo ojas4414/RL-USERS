@@ -19,13 +19,14 @@ LIVE_CHANNEL = "rl_users_live"
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global _producer
-    for attempt in range(6):
-        try:
-            _producer = get_producer()
-            break
-        except Exception:
-            if attempt < 5:
-                time.sleep(5)
+    if os.environ.get("KAFKA_HOST"):
+        for attempt in range(6):
+            try:
+                _producer = get_producer()
+                break
+            except Exception:
+                if attempt < 5:
+                    time.sleep(5)
     yield
 
 

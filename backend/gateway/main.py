@@ -7,7 +7,8 @@ import httpx
 import redis.asyncio as aioredis
 from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, RedirectResponse
+from fastapi.staticfiles import StaticFiles
 
 from comms.kafka_client import get_producer, publish_event
 
@@ -115,3 +116,11 @@ async def live_simulation(websocket: WebSocket):
     finally:
         await pubsub.unsubscribe(LIVE_CHANNEL)
         await r.aclose()
+
+
+if os.path.isdir("visuals"):
+    app.mount("/dashboard", StaticFiles(directory="visuals", html=True), name="dashboard")
+
+    @app.get("/")
+    async def root():
+        return RedirectResponse(url="/dashboard/dashboard.html")

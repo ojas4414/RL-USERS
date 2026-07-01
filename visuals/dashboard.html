@@ -477,7 +477,10 @@
         };
 
         try {
-          ws = new WebSocket(`ws://${location.hostname}:8000/ws/live`);
+          const wsProtocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+          const isLocalDev = location.hostname === 'localhost' || location.hostname === '127.0.0.1';
+          const wsHost = isLocalDev && location.port !== '8000' ? `${location.hostname}:8000` : location.host;
+          ws = new WebSocket(`${wsProtocol}//${wsHost}/ws/live`);
           ws.onopen = () => { if (!cancelled) setWsConnected(true); };
           ws.onmessage = (event) => {
             if (cancelled) return;

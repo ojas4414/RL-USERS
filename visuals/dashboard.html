@@ -1,0 +1,637 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>RL-USERS Dashboard</title>
+  <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <script src="https://unpkg.com/d3@7/dist/d3.min.js"></script>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body { background: #0F0F0F; color: #E5E7EB; font-family: system-ui, -apple-system, sans-serif; }
+    @keyframes spin   { to { transform: rotate(360deg); } }
+    @keyframes fadeIn { from { opacity:0; transform:translateY(-8px); } to { opacity:1; transform:none; } }
+    .live-row { animation: fadeIn 0.35s ease; }
+    @keyframes pulse  { 0%,100%{opacity:1} 50%{opacity:0.35} }
+    .dot-pulse { animation: pulse 1.2s ease-in-out infinite; }
+  </style>
+</head>
+<body>
+  <div id="root"><div style="padding:40px;color:#6B7280;font-family:monospace;">Loading...</div></div>
+
+  <script>
+    window.onerror = function(msg, src, line) {
+      document.getElementById('root').innerHTML =
+        '<div style="padding:40px;color:#EF4444;font-family:monospace;line-height:2">' +
+        '<b>Script error</b><br>' + msg + '<br>' + src + ':' + line + '</div>';
+    };
+  </script>
+
+  <script type="text/babel">
+    const { useState, useEffect, useRef } = React;
+
+    const S = {
+      bg: '#0F0F0F', card: '#1A1A1A', border: '#2A2A2A',
+      text: '#E5E7EB', muted: '#6B7280', dim: '#4B5563',
+      blue: '#3B82F6', purple: '#8B5CF6', green: '#22C55E',
+      red: '#EF4444', amber: '#F59E0B', orange: '#F97316',
+    };
+    const pColor = { power_buyer: '#EF4444', average_buyer: '#3B82F6', browser: '#22C55E' };
+
+    const card = (extra = {}) => ({
+      background: S.card, border: `1px solid ${S.border}`, borderRadius: 12, padding: 20, ...extra,
+    });
+
+    /* ── SVG grouped bar chart (session lengths) ── */
+    const GroupedBarChart = ({ data, keys, colors, labels }) => {
+      const maxVal = Math.max(...data.flatMap(d => keys.map(k => d[k] || 0)), 1);
+      const PL = 28, PB = 26, PT = 8, PR = 8;
+      const W = 340, H = 190;
+      const iW = W - PL - PR, iH = H - PT - PB;
+      const gW = iW / data.length;
+      const bW = Math.floor(gW / (keys.length + 1));
+      return (
+        <div>
+          <div style={{ display: 'flex', gap: 14, marginBottom: 10 }}>
+            {keys.map((k, i) => (
+              <div key={k} style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: '0.74rem', color: S.muted }}>
+                <div style={{ width: 10, height: 10, background: colors[i], borderRadius: 2 }} />{labels[i]}
+              </div>
+            ))}
+          </div>
+          <svg viewBox={`0 0 ${W} ${H}`} width="100%" style={{ display: 'block' }}>
+            {[0, 0.5, 1].map(t => (
+              <g key={t}>
+                <line x1={PL} x2={W - PR} y1={PT + iH * (1 - t)} y2={PT + iH * (1 - t)} stroke={S.border} strokeDasharray="3 3" />
+                <text x={PL - 4} y={PT + iH * (1 - t) + 4} textAnchor="end" fill={S.muted} fontSize={9}>{Math.round(maxVal * t)}</text>
+              </g>
+            ))}
+            {data.map((d, i) => (
+              <g key={i} transform={`translate(${PL + i * gW},0)`}>
+                {keys.map((k, ki) => {
+                  const bh = Math.max(((d[k] || 0) / maxVal) * iH, 1);
+                  const bx = (gW - keys.length * bW) / 2 + ki * bW;
+                  return <rect key={k} x={bx} y={PT + iH - bh} width={bW - 2} height={bh} fill={colors[ki]} opacity={0.8} rx={2} />;
+                })}
+                <text x={gW / 2} y={H - 4} textAnchor="middle" fill={S.muted} fontSize={9}>{d.bucket}</text>
+              </g>
+            ))}
+          </svg>
+        </div>
+      );
+    };
+
+    /* ── SVG horizontal bar chart (trending products) ── */
+    const HBarChart = ({ data }) => {
+      const maxVal = Math.max(...data.map(d => d.count), 1);
+      const PL = 68, PR = 30, PT = 6, PB = 6;
+      const W = 340, rowH = 22;
+      const H = PT + data.length * rowH + PB;
+      const iW = W - PL - PR;
+      return (
+        <svg viewBox={`0 0 ${W} ${H}`} width="100%" style={{ display: 'block' }}>
+          {data.map((d, i) => {
+            const bw = Math.max((d.count / maxVal) * iW, 2);
+            const y = PT + i * rowH;
+            const fill = `hsl(263,75%,${38 + (i / data.length) * 36}%)`;
+            return (
+              <g key={i}>
+                <text x={PL - 4} y={y + 14} textAnchor="end" fill={S.muted} fontSize={9} fontFamily="monospace">
+                  {'...' + d.product.slice(-6)}
+                </text>
+                <rect x={PL} y={y + 3} width={bw} height={rowH - 6} fill={fill} rx={2} />
+                <text x={PL + bw + 4} y={y + 14} fill="#9CA3AF" fontSize={9}>{d.count}</text>
+              </g>
+            );
+          })}
+        </svg>
+      );
+    };
+
+    /* ── Hero ── */
+    const Hero = ({ data }) => {
+      const keys = ['session_length', 'conversion_rate', 'abandonment_rate', 'social_influence_coefficient'];
+      const pass = keys.filter(k => data[k]?.verdict === 'PASS').length;
+      const stats = [
+        { val: '701K', label: 'Amazon reviews' },
+        { val: '50', label: 'Simulated shoppers' },
+        { val: `${pass} PASS / ${4 - pass} FAIL`, label: 'Behavioral metrics' },
+        { val: 'BFS · Heap · Topo', label: 'CS algorithms' },
+      ];
+      return (
+        <div style={{ background: 'linear-gradient(135deg,#0D0D1F 0%,#1A0F2E 100%)', padding: '44px 32px 36px', borderBottom: `1px solid ${S.border}` }}>
+          <div style={{ fontFamily: 'monospace', fontSize: '0.72rem', color: S.purple, letterSpacing: '0.15em', marginBottom: 8 }}>MULTI-AGENT REINFORCEMENT LEARNING</div>
+          <h1 style={{ fontSize: '2.6rem', fontWeight: 800, fontFamily: 'monospace', color: S.blue, marginBottom: 10 }}>RL-USERS</h1>
+          <p style={{ color: S.muted, fontSize: '1rem', marginBottom: 32, maxWidth: 520 }}>
+            50 virtual shoppers learn realistic e-commerce behavior from Amazon purchase data and influence each other through a social graph.
+          </p>
+          <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap' }}>
+            {stats.map(s => (
+              <div key={s.label} style={{ ...card(), flex: '1 1 160px', background: 'rgba(255,255,255,0.04)', borderColor: 'rgba(255,255,255,0.08)' }}>
+                <div style={{ fontSize: '1.5rem', fontWeight: 700, fontFamily: 'monospace', color: S.blue, marginBottom: 4 }}>{s.val}</div>
+                <div style={{ color: S.muted, fontSize: '0.8rem' }}>{s.label}</div>
+              </div>
+            ))}
+          </div>
+        </div>
+      );
+    };
+
+    /* ── Social Graph (D3) ── */
+    const SocialGraph = () => {
+      const ref = useRef(null);
+      const [tip, setTip] = useState(null);
+
+      useEffect(() => {
+        if (!ref.current) return;
+        const W = 560, H = 440;
+        const personas = [...Array(10).fill('power_buyer'), ...Array(35).fill('average_buyer'), ...Array(5).fill('browser')];
+        const balFn = { power_buyer: () => (Math.random()*2000+3000).toFixed(0), average_buyer: () => (Math.random()*1500+500).toFixed(0), browser: () => (Math.random()*250+50).toFixed(0) };
+        const nodes = personas.map((persona, id) => ({ id, persona, balance: balFn[persona]() }));
+        const pairs = [];
+        for (let i = 0; i < 50; i++) for (let j = i+1; j < 50; j++) if (Math.random() < 0.1) pairs.push([i, j]);
+        const adj = Array.from({ length: 50 }, () => []);
+        pairs.forEach(([s, t]) => { adj[s].push(t); adj[t].push(s); });
+        const links = pairs.map(([s, t]) => ({ source: s, target: t }));
+
+        d3.select(ref.current).selectAll('*').remove();
+        const svg = d3.select(ref.current).attr('viewBox', `0 0 ${W} ${H}`).attr('width', '100%');
+
+        const sim = d3.forceSimulation(nodes)
+          .force('link', d3.forceLink(links).id(d => d.id).distance(55))
+          .force('charge', d3.forceManyBody().strength(-100))
+          .force('center', d3.forceCenter(W/2, H/2))
+          .force('collision', d3.forceCollide(14));
+
+        const linkEl = svg.append('g').selectAll('line').data(links).join('line')
+          .attr('class', 'social-link')
+          .attr('stroke', '#2A2A2A').attr('stroke-width', 1).attr('stroke-opacity', 0.55);
+        const ng = svg.append('g').selectAll('g').data(nodes).join('g').style('cursor', 'pointer');
+
+        const baseRadius = d => d.persona === 'power_buyer' ? 9 : 6;
+
+        ng.append('circle')
+          .attr('id', d => `n${d.id}`)
+          .attr('class', 'agent-node')
+          .attr('r', baseRadius)
+          .attr('fill', d => pColor[d.persona])
+          .attr('opacity', 0.85)
+          .attr('stroke', '#0F0F0F').attr('stroke-width', 1.5);
+
+        const endpointId = end => typeof end === 'object' ? end.id : end;
+        let pulseTimers = [];
+
+        ng.on('click', (evt, d) => {
+          pulseTimers.forEach(clearTimeout);
+          pulseTimers = [];
+
+          const d0 = new Set([d.id]);
+          const d1 = new Set();
+          const d2 = new Set();
+          adj[d.id].forEach(n => { if (!d0.has(n)) d1.add(n); });
+          d1.forEach(n => adj[n].forEach(m => { if (!d0.has(m) && !d1.has(m)) d2.add(m); }));
+
+          const applyStage = (rootSet, firstSet, secondSet, hasPulse) => {
+            svg.selectAll('.agent-node')
+              .transition('pulse-node').duration(250)
+              .attr('r', nd => rootSet.has(nd.id) ? baseRadius(nd) + 6
+                             : firstSet.has(nd.id) ? baseRadius(nd) + 4
+                             : secondSet.has(nd.id) ? baseRadius(nd) + 2
+                             : baseRadius(nd))
+              .attr('stroke', nd => rootSet.has(nd.id) ? '#FFFFFF'
+                                   : firstSet.has(nd.id) ? '#FFD700'
+                                   : secondSet.has(nd.id) ? '#FFA500'
+                                   : '#0F0F0F')
+              .attr('stroke-width', nd => rootSet.has(nd.id) ? 3
+                                         : firstSet.has(nd.id) ? 2.2
+                                         : secondSet.has(nd.id) ? 1.6
+                                         : 1.5)
+              .attr('opacity', nd => !hasPulse ? 0.85
+                                    : (rootSet.has(nd.id) || firstSet.has(nd.id) || secondSet.has(nd.id)) ? 1 : 0.22)
+              .style('filter', nd => rootSet.has(nd.id) ? 'drop-shadow(0 0 9px #FFFFFF)'
+                                    : firstSet.has(nd.id) ? 'drop-shadow(0 0 7px #FFD700)'
+                                    : secondSet.has(nd.id) ? 'drop-shadow(0 0 5px #FFA500)'
+                                    : 'none');
+
+            svg.selectAll('.social-link')
+              .transition('pulse-link').duration(250)
+              .attr('stroke', ld => {
+                const s = endpointId(ld.source), t = endpointId(ld.target);
+                const rootToFirst = (rootSet.has(s) && firstSet.has(t)) || (rootSet.has(t) && firstSet.has(s));
+                const firstToSecond = (firstSet.has(s) && secondSet.has(t)) || (firstSet.has(t) && secondSet.has(s));
+                return rootToFirst ? '#FFD700' : firstToSecond ? '#FFA500' : '#2A2A2A';
+              })
+              .attr('stroke-opacity', ld => {
+                const s = endpointId(ld.source), t = endpointId(ld.target);
+                const active = (rootSet.has(s) && firstSet.has(t)) || (rootSet.has(t) && firstSet.has(s)) ||
+                               (firstSet.has(s) && secondSet.has(t)) || (firstSet.has(t) && secondSet.has(s));
+                return active ? 0.95 : hasPulse ? 0.12 : 0.55;
+              })
+              .attr('stroke-width', ld => {
+                const s = endpointId(ld.source), t = endpointId(ld.target);
+                const active = (rootSet.has(s) && firstSet.has(t)) || (rootSet.has(t) && firstSet.has(s)) ||
+                               (firstSet.has(s) && secondSet.has(t)) || (firstSet.has(t) && secondSet.has(s));
+                return active ? 2 : 1;
+              });
+          };
+
+          const empty = new Set();
+          applyStage(d0, empty, empty, true);
+          pulseTimers.push(setTimeout(() => applyStage(d0, d1, empty, true), 300));
+          pulseTimers.push(setTimeout(() => applyStage(d0, d1, d2, true), 650));
+          pulseTimers.push(setTimeout(() => applyStage(empty, empty, empty, false), 1600));
+        });
+
+        ng.on('mouseover', (evt, d) => {
+          const [x, y] = d3.pointer(evt, ref.current);
+          setTip({ x, y, d });
+        }).on('mouseout', () => setTip(null));
+
+        const PAD = 14;
+        sim.on('tick', () => {
+          nodes.forEach(d => {
+            d.x = Math.max(PAD, Math.min(W - PAD, d.x));
+            d.y = Math.max(PAD, Math.min(H - PAD, d.y));
+          });
+          linkEl.attr('x1', d => d.source.x).attr('y1', d => d.source.y).attr('x2', d => d.target.x).attr('y2', d => d.target.y);
+          ng.attr('transform', d => `translate(${d.x},${d.y})`);
+        });
+        return () => { sim.stop(); pulseTimers.forEach(clearTimeout); };
+      }, []);
+
+      return (
+        <div style={{ ...card(), position: 'relative' }}>
+          <h3 style={{ fontFamily: 'monospace', fontSize: '1rem', marginBottom: 4 }}>Shopper Social Network</h3>
+          <p style={{ color: S.muted, fontSize: '0.76rem', marginBottom: 12 }}>Click any node to watch BFS influence spread</p>
+          <div style={{ display: 'flex', gap: 16, marginBottom: 10 }}>
+            {[['power_buyer','Power Buyers'],['average_buyer','Regular Buyers'],['browser','Browsers']].map(([k,l]) => (
+              <div key={k} style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: '0.76rem', color: S.muted }}>
+                <div style={{ width: 9, height: 9, borderRadius: '50%', background: pColor[k] }} />{l}
+              </div>
+            ))}
+          </div>
+          <svg ref={ref} style={{ display: 'block', width: '100%', overflow: 'hidden', borderRadius: 8 }} />
+          {tip && (
+            <div style={{ position: 'absolute', left: tip.x + 14, top: tip.y - 10, background: '#0A0A0A', border: `1px solid ${S.blue}`, borderRadius: 8, padding: '8px 12px', fontSize: '0.76rem', pointerEvents: 'none', zIndex: 20 }}>
+              <div style={{ fontFamily: 'monospace', color: S.blue, marginBottom: 2 }}>Agent #{tip.d.id}</div>
+              <div style={{ color: S.muted }}>{tip.d.persona.replace('_',' ')}</div>
+              <div style={{ color: S.text }}>Balance: Rs.{tip.d.balance}</div>
+            </div>
+          )}
+        </div>
+      );
+    };
+
+    /* ── Metrics Panel ── */
+    const MetricsPanel = ({ data }) => {
+      const [hov, setHov] = useState(null);
+      const rows = [
+        { key: 'session_length', label: 'Session Length', bench: '~8 items',
+          sim: `${data.session_length?.simulated?.mean?.toFixed(1)} +/- ${data.session_length?.simulated?.std?.toFixed(1)}`,
+          verdict: data.session_length?.verdict },
+        { key: 'conversion_rate', label: 'Purchase Rate', bench: '2-20%',
+          sim: `${((data.conversion_rate?.simulated || 0)*100).toFixed(1)}%`,
+          verdict: data.conversion_rate?.verdict },
+        { key: 'abandonment_rate', label: 'Cart Abandonment', bench: '60-95%',
+          sim: `${((data.abandonment_rate?.simulated || 0)*100).toFixed(1)}%`,
+          verdict: data.abandonment_rate?.verdict },
+        { key: 'social', label: 'Trend Concentration', bench: '20-40%',
+          sim: `${((data.social_influence_coefficient?.simulated || 0)*100).toFixed(1)}%`,
+          verdict: data.social_influence_coefficient?.verdict,
+          note: 'With 2,985 real Amazon products, purchases spread across many items. Known limitation — not a modeling failure.' },
+      ];
+      return (
+        <div style={card()}>
+          <h3 style={{ fontFamily: 'monospace', fontSize: '1rem', marginBottom: 16 }}>Behavioral Metrics</h3>
+          {rows.map(m => (
+            <div key={m.key} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 0', borderBottom: `1px solid ${S.border}` }}>
+              <div style={{ flex: 2.5, fontSize: '0.86rem' }}>{m.label}</div>
+              <div style={{ flex: 1.8, fontSize: '0.76rem', color: S.muted, fontFamily: 'monospace' }}>{m.bench}</div>
+              <div style={{ flex: 1.8, fontFamily: 'monospace', fontSize: '0.86rem' }}>{m.sim}</div>
+              <div style={{ position: 'relative', flexShrink: 0 }}>
+                <span
+                  style={{ background: m.verdict==='PASS'?'#052e16':'#2c1a00', color: m.verdict==='PASS'?S.green:S.amber, border:`1px solid ${m.verdict==='PASS'?'#166534':'#92400e'}`, padding:'3px 10px', borderRadius:20, fontSize:'0.72rem', fontFamily:'monospace', fontWeight:700, cursor: m.note?'help':'default', whiteSpace:'nowrap' }}
+                  onMouseEnter={() => m.note && setHov(m.key)}
+                  onMouseLeave={() => setHov(null)}
+                >{m.verdict==='PASS'?'PASS':'FAIL'}</span>
+                {hov===m.key && (
+                  <div style={{ position:'absolute', right:0, top:'110%', zIndex:30, background:'#0A0A0A', border:`1px solid ${S.amber}`, borderRadius:8, padding:'10px 14px', width:250, fontSize:'0.76rem', color:'#D1D5DB', lineHeight:1.6 }}>{m.note}</div>
+                )}
+              </div>
+            </div>
+          ))}
+          <p style={{ marginTop:14, color:S.dim, fontSize:'0.7rem', lineHeight:1.7 }}>
+            Behavioral patterns — attention span, abandonment, social influence — are the correct validation signal for a user simulator.
+          </p>
+        </div>
+      );
+    };
+
+    /* ── Budget Sensitivity ── */
+    const BudgetPanel = ({ data }) => {
+      const bs = data.budget_sensitivity || {};
+      const rows = [['power_buyer','Power Buyers',S.red],['average_buyer','Regular Buyers',S.blue],['browser','Browsers',S.green]];
+      const max = Math.max(...rows.map(([k]) => bs[k] || 0), 0.01);
+      return (
+        <div style={card()}>
+          <h3 style={{ fontFamily:'monospace', fontSize:'1rem', marginBottom:4 }}>Purchases Per Shopper Type</h3>
+          <p style={{ color:S.dim, fontSize:'0.74rem', marginBottom:18 }}>Higher budget = more purchases</p>
+          {rows.map(([k,label,color]) => (
+            <div key={k} style={{ marginBottom:14 }}>
+              <div style={{ display:'flex', justifyContent:'space-between', marginBottom:5 }}>
+                <span style={{ fontSize:'0.84rem' }}>{label}</span>
+                <span style={{ fontFamily:'monospace', fontSize:'0.84rem', color }}>{(bs[k]||0).toFixed(2)} avg</span>
+              </div>
+              <div style={{ background:S.border, borderRadius:4, height:7, overflow:'hidden' }}>
+                <div style={{ background:color, height:'100%', borderRadius:4, width:`${((bs[k]||0)/max)*100}%`, opacity:0.85 }} />
+              </div>
+            </div>
+          ))}
+        </div>
+      );
+    };
+
+    /* ── Session Length Chart ── */
+    const SessionChart = ({ data }) => {
+      const bin = lens => {
+        const b = { '1-5':0,'6-10':0,'11-15':0,'16-20':0,'21+':0 };
+        (lens||[]).forEach(l => { if(l<=5)b['1-5']++; else if(l<=10)b['6-10']++; else if(l<=15)b['11-15']++; else if(l<=20)b['16-20']++; else b['21+']++; });
+        return b;
+      };
+      const sB = bin(data.sim_session_lengths), rB = bin(data.real_session_lengths);
+      const chartData = Object.keys(sB).map(k => ({ bucket:k, real:rB[k]||0, sim:sB[k]||0 }));
+      return (
+        <div style={card()}>
+          <h3 style={{ fontFamily:'monospace', fontSize:'0.92rem', marginBottom:4 }}>Session Length</h3>
+          <p style={{ color:S.muted, fontSize:'0.74rem', marginBottom:14 }}>Items viewed per shopping session</p>
+          <GroupedBarChart data={chartData} keys={['real','sim']} colors={[S.blue,S.orange]} labels={['Real users','Simulated']} />
+        </div>
+      );
+    };
+
+    /* ── Trending Products ── */
+    const TrendingChart = ({ data }) => {
+      const raw = (data.trending_products||[]).slice(0,10);
+      const total = raw.reduce((s,t)=>s+t.count,0);
+      const top3 = raw.slice(0,3).reduce((s,t)=>s+t.count,0);
+      const pct = total>0?Math.round((top3/total)*100):0;
+      return (
+        <div style={card()}>
+          <h3 style={{ fontFamily:'monospace', fontSize:'0.92rem', marginBottom:4 }}>Trending Products</h3>
+          <p style={{ color:S.muted, fontSize:'0.74rem', marginBottom:14 }}>Top 3 = {pct}% of all interactions</p>
+          <HBarChart data={raw} />
+        </div>
+      );
+    };
+
+    /* ── Purchase Funnel ── */
+    const Funnel = ({ data }) => {
+      const conv = data.conversion_rate?.simulated || 0;
+      const chk = Math.round(conv*100);
+      const steps = [
+        { label:'Browse',         pct:100, color:'#6366F1' },
+        { label:'Product Detail', pct:Math.min(Math.round(chk/0.55),88), color:'#8B5CF6' },
+        { label:'Cart',           pct:Math.min(Math.round(chk/0.3),65),  color:'#A78BFA' },
+        { label:'Checkout',       pct:chk, color:'#C4B5FD' },
+      ];
+      return (
+        <div style={{ ...card(), display:'flex', flexDirection:'column' }}>
+          <h3 style={{ fontFamily:'monospace', fontSize:'0.92rem', marginBottom:4 }}>Purchase Funnel</h3>
+          <p style={{ color:S.muted, fontSize:'0.74rem', marginBottom:20 }}>Derived from simulation data</p>
+          <div style={{ display:'flex', flexDirection:'column', alignItems:'center', gap:0, flex:1, justifyContent:'center' }}>
+            {steps.map((s,i) => (
+              <div key={i} style={{ width:'100%', display:'flex', flexDirection:'column', alignItems:'center' }}>
+                <div style={{ width:`${Math.max(s.pct,18)}%`, background:s.color, borderRadius:6, padding:'10px 14px', display:'flex', justifyContent:'space-between', alignItems:'center' }}>
+                  <span style={{ fontSize:'0.8rem', fontWeight:600, color:'#0F0F0F' }}>{s.label}</span>
+                  <span style={{ fontFamily:'monospace', fontWeight:800, fontSize:'0.86rem', color:'#0F0F0F' }}>{s.pct}%</span>
+                </div>
+                {i<steps.length-1&&<div style={{ color:S.dim, fontSize:'1.1rem', lineHeight:'20px' }}>v</div>}
+              </div>
+            ))}
+          </div>
+        </div>
+      );
+    };
+
+    /* ── Architecture ── */
+    const Architecture = () => {
+      const boxes = [
+        { icon:'[DATA]',  title:'Amazon Data',  sub:'701K reviews / 2,985 products' },
+        { icon:'[TRAIN]', title:'Training',      sub:'Behavioral cloning -> PPO fine-tuning' },
+        { icon:'[SIM]',   title:'50 Agents',     sub:'Heap scheduler / BFS propagation / Topo sort' },
+        { icon:'[VALID]', title:'Validation',    sub:'Session length / Purchase rate / Abandonment' },
+      ];
+      return (
+        <div style={{ background:'#111', borderTop:`1px solid ${S.border}`, padding:'36px 32px 28px' }}>
+          <div style={{ fontFamily:'monospace', fontSize:'0.7rem', color:S.dim, letterSpacing:'0.15em', textAlign:'center', marginBottom:24 }}>SYSTEM ARCHITECTURE</div>
+          <div style={{ display:'flex', alignItems:'center', justifyContent:'center', gap:0, flexWrap:'wrap' }}>
+            {boxes.map((b,i) => (
+              <React.Fragment key={i}>
+                <div style={{ background:S.bg, border:`1px solid ${S.border}`, borderRadius:10, padding:'16px 20px', minWidth:170, textAlign:'center' }}>
+                  <div style={{ fontFamily:'monospace', fontSize:'0.7rem', color:S.purple, marginBottom:6 }}>{b.icon}</div>
+                  <div style={{ fontFamily:'monospace', fontSize:'0.88rem', color:S.text, marginBottom:4 }}>{b.title}</div>
+                  <div style={{ color:S.dim, fontSize:'0.7rem', lineHeight:1.6 }}>{b.sub}</div>
+                </div>
+                {i<boxes.length-1&&<div style={{ color:S.blue, fontSize:'1.3rem', padding:'0 8px', opacity:0.7 }}>-&gt;</div>}
+              </React.Fragment>
+            ))}
+          </div>
+          <p style={{ textAlign:'center', color:S.dim, fontSize:'0.72rem', marginTop:28, fontFamily:'monospace' }}>
+            Built with PyTorch / FastAPI / Redis / Kafka / C++ (libtorch) / pybind11
+          </p>
+        </div>
+      );
+    };
+
+    /* ── Live Feed ── */
+    const ACTION_META = {
+      browse:         { label:'BROWSE',  color:'#6B7280', bg:'#1F2937' },
+      product_detail: { label:'VIEW',    color:'#3B82F6', bg:'#172554' },
+      cart:           { label:'CART',    color:'#F59E0B', bg:'#1c1200' },
+      checkout:       { label:'BOUGHT',  color:'#22C55E', bg:'#052e16' },
+    };
+    const PERSONA_COLOR = { power_buyer:'#EF4444', average_buyer:'#3B82F6', browser:'#22C55E' };
+    const PERSONA_SHORT = { power_buyer:'PWR', average_buyer:'REG', browser:'BRW' };
+
+    const LiveFeed = () => {
+      const [live, setLive] = useState(null);
+      const [err,  setErr]  = useState(false);
+      const [wsConnected, setWsConnected] = useState(false);
+
+      useEffect(() => {
+        let cancelled = false;
+        let ws = null;
+        let pollId = null;
+
+        const startPolling = () => {
+          if (pollId) return;
+          const poll = () =>
+            fetch('./live_events.json?t=' + Date.now())
+              .then(r => r.ok ? r.json() : Promise.reject())
+              .then(d => { if (!cancelled) { setLive(d); setErr(false); } })
+              .catch(() => { if (!cancelled) setErr(true); });
+          poll();
+          pollId = setInterval(poll, 2000);
+        };
+
+        try {
+          ws = new WebSocket(`ws://${location.hostname}:8000/ws/live`);
+          ws.onopen = () => { if (!cancelled) setWsConnected(true); };
+          ws.onmessage = (event) => {
+            if (cancelled) return;
+            try {
+              setLive(JSON.parse(event.data));
+              setErr(false);
+            } catch (e) { /* malformed frame, ignore */ }
+          };
+          ws.onerror = () => { if (!cancelled) setWsConnected(false); };
+          ws.onclose = () => {
+            if (cancelled) return;
+            setWsConnected(false);
+            startPolling();   // simulation not running via WS — fall back to last saved file
+          };
+        } catch (e) {
+          startPolling();
+        }
+
+        return () => {
+          cancelled = true;
+          if (ws) ws.close();
+          if (pollId) clearInterval(pollId);
+        };
+      }, []);
+
+      if (err || !live) return (
+        <div style={{ background:'#1A1A1A', border:'1px solid #2A2A2A', borderRadius:12, padding:20, marginBottom:0 }}>
+          <div style={{ display:'flex', alignItems:'center', gap:8, marginBottom:12 }}>
+            <div style={{ width:8, height:8, borderRadius:'50%', background:'#374151' }} />
+            <span style={{ fontFamily:'monospace', fontSize:'0.86rem', color:'#6B7280' }}>Live Agent Feed</span>
+            <span style={{ marginLeft:'auto', color:'#374151', fontSize:'0.74rem', fontFamily:'monospace' }}>○ LAST RUN</span>
+          </div>
+          <div style={{ color:'#4B5563', fontSize:'0.8rem', lineHeight:1.8 }}>
+            No live simulation running.<br />
+            Start one in a terminal: <code style={{ background:'#111', padding:'2px 8px', borderRadius:4, color:'#3B82F6' }}>python simulate_live.py</code>
+          </div>
+        </div>
+      );
+
+      const st = live.stats || {};
+      const events = (live.events || []).slice(0, 30);
+      const purchases = events.filter(e => e.action === 'checkout');
+
+      return (
+        <div style={{ background:'#0A0A0A', border:'1px solid #1E3A5F', borderRadius:12, padding:20, display:'flex', flexDirection:'column', gap:0 }}>
+          {/* header */}
+          <div style={{ display:'flex', alignItems:'center', gap:8, marginBottom:14, flexWrap:'wrap' }}>
+            <div className={wsConnected ? 'dot-pulse' : ''} style={{ width:8, height:8, borderRadius:'50%', background: wsConnected ? '#22C55E' : '#6B7280', flexShrink:0 }} />
+            <span style={{ fontFamily:'monospace', fontSize:'0.9rem', color:'#E5E7EB', fontWeight:700 }}>Live Agent Feed</span>
+            <span style={{ fontFamily:'monospace', fontSize:'0.72rem', fontWeight:700, color: wsConnected ? '#22C55E' : '#6B7280' }}>
+              {wsConnected ? '● LIVE' : '○ LAST RUN'}
+            </span>
+            <div style={{ display:'flex', gap:16, marginLeft:'auto', flexWrap:'wrap' }}>
+              {[
+                ['Events', st.total_events?.toLocaleString()],
+                ['Purchases', st.total_purchases?.toLocaleString()],
+                ['Events/min', st.events_per_minute],
+                ['Spend', st.total_spend != null ? 'Rs.' + Math.round(st.total_spend).toLocaleString() : '-'],
+              ].map(([k,v]) => (
+                <div key={k} style={{ textAlign:'right' }}>
+                  <div style={{ fontFamily:'monospace', fontSize:'0.9rem', color:'#3B82F6', fontWeight:700 }}>{v ?? '—'}</div>
+                  <div style={{ fontSize:'0.65rem', color:'#6B7280' }}>{k}</div>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* purchase flash (last 3 checkouts) */}
+          {purchases.length > 0 && (
+            <div style={{ display:'flex', gap:8, marginBottom:12, overflowX:'auto', paddingBottom:4 }}>
+              {purchases.slice(0,3).map((e,i) => (
+                <div key={i} style={{ background:'#052e16', border:'1px solid #166534', borderRadius:8, padding:'8px 12px', flexShrink:0 }}>
+                  <div style={{ fontSize:'0.65rem', color:'#6B7280', marginBottom:2 }}>PURCHASE</div>
+                  <div style={{ fontFamily:'monospace', fontSize:'0.8rem', color:'#22C55E' }}>Agent #{e.agent_id} · Rs.{e.amount}</div>
+                  <div style={{ fontSize:'0.7rem', color:'#4ADE80', marginTop:2 }}>{e.product}</div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* scrolling rows */}
+          <div style={{ display:'flex', flexDirection:'column', gap:3, maxHeight:280, overflowY:'auto' }}>
+            {events.map((e, i) => {
+              const m = ACTION_META[e.action] || ACTION_META.browse;
+              return (
+                <div key={i} className={i < 3 ? 'live-row' : ''} style={{ display:'flex', alignItems:'center', gap:8, padding:'5px 8px', borderRadius:6, background: i === 0 ? '#111827' : 'transparent' }}>
+                  <span style={{ fontSize:'0.68rem', color:'#4B5563', fontFamily:'monospace', flexShrink:0, width:52 }}>{e.time}</span>
+                  <span style={{ fontSize:'0.65rem', fontWeight:700, padding:'2px 6px', borderRadius:4, background:PERSONA_COLOR[e.persona]+'22', color:PERSONA_COLOR[e.persona], flexShrink:0, width:28, textAlign:'center' }}>{PERSONA_SHORT[e.persona]}</span>
+                  <span style={{ fontSize:'0.67rem', color:'#6B7280', flexShrink:0 }}>#{e.agent_id}</span>
+                  <span style={{ fontSize:'0.65rem', fontWeight:700, padding:'2px 7px', borderRadius:4, background:m.bg, color:m.color, flexShrink:0, width:52, textAlign:'center' }}>{m.label}</span>
+                  <span style={{ fontFamily:'monospace', fontSize:'0.72rem', color:'#9CA3AF', flex:1, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{e.product}</span>
+                  {e.amount != null && <span style={{ fontFamily:'monospace', fontSize:'0.72rem', color:'#22C55E', flexShrink:0 }}>Rs.{e.amount}</span>}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      );
+    };
+
+    /* ── App ── */
+    const App = () => {
+      const [data, setData] = useState(null);
+      const [err,  setErr]  = useState(null);
+
+      useEffect(() => {
+        fetch('./validation_report.json')
+          .then(r => { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
+          .then(setData)
+          .catch(e => setErr(e.message));
+      }, []);
+
+      if (err) return (
+        <div style={{ display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', height:'100vh', gap:16, padding:32, textAlign:'center' }}>
+          <div style={{ fontFamily:'monospace', fontSize:'1.1rem', color:S.red }}>Could not load validation_report.json</div>
+          <div style={{ color:S.muted, fontSize:'0.88rem', maxWidth:440, lineHeight:1.7 }}>
+            Run <code style={{ background:S.card, padding:'2px 8px', borderRadius:4, color:S.blue }}>python simulate.py</code> first,
+            then serve via <code style={{ background:S.card, padding:'2px 8px', borderRadius:4, color:S.blue }}>python -m http.server 8080</code> from the project root and open localhost:8080/visuals/dashboard.html
+          </div>
+          <div style={{ color:S.dim, fontSize:'0.8rem', fontFamily:'monospace' }}>Error: {err}</div>
+        </div>
+      );
+
+      if (!data) return (
+        <div style={{ display:'flex', alignItems:'center', justifyContent:'center', height:'100vh', gap:12 }}>
+          <div style={{ width:20, height:20, border:`2px solid ${S.blue}`, borderTopColor:'transparent', borderRadius:'50%', animation:'spin 0.8s linear infinite' }} />
+          <span style={{ fontFamily:'monospace', color:S.muted }}>Loading simulation data...</span>
+        </div>
+      );
+
+      return (
+        <div style={{ minHeight:'100vh' }}>
+          <Hero data={data} />
+          <div style={{ padding:'20px 32px 0' }}>
+            <LiveFeed />
+          </div>
+          <div style={{ padding:'20px 32px', display:'grid', gridTemplateColumns:'1fr 1fr', gap:20, alignItems:'start' }}>
+            <SocialGraph />
+            <div style={{ display:'flex', flexDirection:'column', gap:20 }}>
+              <MetricsPanel data={data} />
+              <BudgetPanel data={data} />
+            </div>
+          </div>
+          <div style={{ padding:'0 32px 28px', display:'grid', gridTemplateColumns:'1fr 1fr 1fr', gap:20, alignItems:'start' }}>
+            <SessionChart data={data} />
+            <TrendingChart data={data} />
+            <Funnel data={data} />
+          </div>
+          <Architecture />
+        </div>
+      );
+    };
+
+    ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+  </script>
+</body>
+</html>

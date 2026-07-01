@@ -1,0 +1,4 @@
+networkx
+matplotlib
+redis
+kafka-python

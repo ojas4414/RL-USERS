@@ -1,0 +1,35 @@
+# Python
+__pycache__/
+*.pyc
+venv/
+*.egg-info/
+
+# Node / frontend
+node_modules/
+.npm-cache/
+dist/
+
+# C++ build artifacts
+agents/cpp/build/
+
+# Logs
+*.log
+
+# Runtime-generated / live simulation output
+visuals/live_events.json
+visuals/live_events.json.tmp
+
+# Large raw dataset — see README for download instructions
+data/raw/*.jsonl
+data/raw/data
+
+# Editor / OS
+.vscode/
+.DS_Store
+Thumbs.db
+
+# Claude Code local state
+.claude/
+
+# Misc empty scaffolding
+.agents/

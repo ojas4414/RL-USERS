@@ -1,0 +1,111 @@
+version: "3.9"
+
+services:
+
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.4.0
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+    ports:
+      - "2181:2181"
+
+  kafka:
+    image: confluentinc/cp-kafka:7.4.0
+    depends_on:
+      - zookeeper
+    ports:
+      - "9092:9092"
+      - "29092:29092"
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092,PLAINTEXT_HOST://0.0.0.0:29092
+      # PLAINTEXT is for other containers (product_service, gateway, ...); PLAINTEXT_HOST
+      # is for processes running on the host machine (e.g. simulate_live.py via venv)
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,PLAINTEXT_HOST://localhost:29092
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      # simulate_live.py runs as an infinite loop and publishes every agent action —
+      # bound disk usage so a long-running dev session can't fill the host disk.
+      # Smaller segments make the byte cap actually enforceable (Kafka only deletes
+      # whole segments, so a 1GB default segment would let 1GB accumulate before
+      # any cleanup could happen at all).
+      KAFKA_LOG_RETENTION_HOURS: 6
+      KAFKA_LOG_RETENTION_BYTES: 209715200
+      KAFKA_LOG_SEGMENT_BYTES: 26214400
+      KAFKA_LOG_RETENTION_CHECK_INTERVAL_MS: 60000
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+
+  product_service:
+    build: ./backend/product_service
+    ports:
+      - "8001:8001"
+    depends_on:
+      - redis
+      - kafka
+    environment:
+      - REDIS_HOST=redis
+      - KAFKA_HOST=kafka
+    volumes:
+      - ./data/raw/All_Beauty.jsonl:/app/data/raw/All_Beauty.jsonl:ro
+
+  cart_service:
+    build: ./backend/cart_service
+    ports:
+      - "8002:8002"
+    depends_on:
+      - redis
+      - kafka
+    environment:
+      - REDIS_HOST=redis
+      - KAFKA_HOST=kafka
+
+  order_service:
+    build: ./backend/order_service
+    ports:
+      - "8003:8003"
+    depends_on:
+      - redis
+      - kafka
+      - product_service
+      - cart_service
+    environment:
+      - REDIS_HOST=redis
+      - KAFKA_HOST=kafka
+      - PRODUCT_SERVICE_URL=http://product_service:8001
+      - CART_SERVICE_URL=http://cart_service:8002
+
+  session_service:
+    build: ./backend/session_service
+    ports:
+      - "8004:8004"
+    depends_on:
+      - redis
+    environment:
+      - REDIS_HOST=redis
+
+  gateway:
+    build:
+      context: .
+      dockerfile: backend/gateway/Dockerfile
+    ports:
+      - "8000:8000"
+    depends_on:
+      - product_service
+      - cart_service
+      - order_service
+      - session_service
+      - kafka
+      - redis
+    environment:
+      - KAFKA_HOST=kafka
+      - REDIS_HOST=redis
+      - PRODUCT_SERVICE_URL=http://product_service:8001
+      - CART_SERVICE_URL=http://cart_service:8002
+      - ORDER_SERVICE_URL=http://order_service:8003
+      - SESSION_SERVICE_URL=http://session_service:8004

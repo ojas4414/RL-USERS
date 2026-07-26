@@ -1,4 +1,22 @@
-networkx
-matplotlib
+# Runtime — enough to serve the dashboard AND run the live simulation.
+# Deliberately no torch: inference goes through policy_rl.onnx via onnxruntime
+# (see agents/policy_runtime.py), which is what makes the simulation fit in a
+# 512 MB instance alongside the web server.
+fastapi
+uvicorn
+websockets
+httpx
+numpy
+onnxruntime
 redis
 kafka-python
+
+# Analysis / plotting
+networkx
+matplotlib
+
+# Development only — training (train.py), batch validation (simulate.py) and
+# regenerating policy_rl.onnx (scripts/export_onnx.py). Not needed to serve.
+# torch
+# pandas
+# scikit-learn

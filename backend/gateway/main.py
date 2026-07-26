@@ -4,17 +4,20 @@ import time
 from contextlib import asynccontextmanager
 
 import httpx
-import redis.asyncio as aioredis
 from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
 from comms.kafka_client import get_producer, publish_event
+from live.runner import LiveRunner
 
 _producer = None
-REDIS_HOST = os.environ.get("REDIS_HOST", "127.0.0.1")
-LIVE_CHANNEL = "rl_users_live"
+
+# One runner per process. It owns the simulation thread and the bus every
+# websocket reads from; a cold start builds a new one from scratch, which is
+# exactly what we want on a free instance that sleeps between visitors.
+live = LiveRunner()
 
 
 @asynccontextmanager
@@ -28,7 +31,14 @@ async def lifespan(app: FastAPI):
             except Exception:
                 if attempt < 5:
                     time.sleep(5)
-    yield
+    # Starts the simulation in the background. Loading the policy takes a second
+    # or two, and doing it here rather than on first request means the feed is
+    # already flowing by the time anyone opens the dashboard.
+    await live.start()
+    try:
+        yield
+    finally:
+        await live.stop()
 
 
 app = FastAPI(lifespan=lifespan)
@@ -101,21 +111,31 @@ async def post_session_start(request: Request):
     return response
 
 
+@app.get("/live/status")
+async def live_status():
+    """What the simulation is doing, and why, without opening a websocket."""
+    return live.snapshot()
+
+
 @app.websocket("/ws/live")
 async def live_simulation(websocket: WebSocket):
+    """Stream simulation snapshots.
+
+    This used to subscribe to Redis directly, which meant that with no Redis
+    reachable the handler raised on connect and the socket closed immediately —
+    the dashboard then fell back to polling a file that does not exist in the
+    deployed image. It now reads the in-process bus, which the runner feeds from
+    either the local simulation or a Redis relay.
+    """
     await websocket.accept()
-    r = aioredis.Redis(host=REDIS_HOST, port=6379, db=0)
-    pubsub = r.pubsub()
-    await pubsub.subscribe(LIVE_CHANNEL)
+    queue = live.bus.subscribe()
     try:
-        async for message in pubsub.listen():
-            if message["type"] == "message":
-                await websocket.send_text(message["data"].decode())
+        while True:
+            await websocket.send_text(await queue.get())
     except WebSocketDisconnect:
         pass
     finally:
-        await pubsub.unsubscribe(LIVE_CHANNEL)
-        await r.aclose()
+        live.bus.unsubscribe(queue)
 
 
 if os.path.isdir("visuals"):

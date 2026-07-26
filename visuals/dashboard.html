@@ -457,68 +457,96 @@
 
     const LiveFeed = () => {
       const [live, setLive] = useState(null);
-      const [err,  setErr]  = useState(false);
       const [wsConnected, setWsConnected] = useState(false);
 
       useEffect(() => {
         let cancelled = false;
         let ws = null;
         let pollId = null;
+        let retryId = null;
+        let retryDelay = 1000;
 
         const startPolling = () => {
           if (pollId) return;
           const poll = () =>
             fetch('./live_events.json?t=' + Date.now())
               .then(r => r.ok ? r.json() : Promise.reject())
-              .then(d => { if (!cancelled) { setLive(d); setErr(false); } })
-              .catch(() => { if (!cancelled) setErr(true); });
+              .then(d => { if (!cancelled) setLive(d); })
+              .catch(() => { /* no saved file — the websocket is the real source */ });
           poll();
           pollId = setInterval(poll, 2000);
         };
 
-        try {
-          const wsProtocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
-          const isLocalDev = location.hostname === 'localhost' || location.hostname === '127.0.0.1';
-          const wsHost = isLocalDev && location.port !== '8000' ? `${location.hostname}:8000` : location.host;
-          ws = new WebSocket(`${wsProtocol}//${wsHost}/ws/live`);
-          ws.onopen = () => { if (!cancelled) setWsConnected(true); };
-          ws.onmessage = (event) => {
-            if (cancelled) return;
-            try {
-              setLive(JSON.parse(event.data));
-              setErr(false);
-            } catch (e) { /* malformed frame, ignore */ }
-          };
-          ws.onerror = () => { if (!cancelled) setWsConnected(false); };
-          ws.onclose = () => {
-            if (cancelled) return;
-            setWsConnected(false);
-            startPolling();   // simulation not running via WS — fall back to last saved file
-          };
-        } catch (e) {
-          startPolling();
-        }
+        const connect = () => {
+          if (cancelled) return;
+          try {
+            const wsProtocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+            const isLocalDev = location.hostname === 'localhost' || location.hostname === '127.0.0.1';
+            const wsHost = isLocalDev && location.port !== '8000' ? `${location.hostname}:8000` : location.host;
+            ws = new WebSocket(`${wsProtocol}//${wsHost}/ws/live`);
+            ws.onopen = () => {
+              if (cancelled) return;
+              setWsConnected(true);
+              retryDelay = 1000;                       // reconnected — reset backoff
+              if (pollId) { clearInterval(pollId); pollId = null; }
+            };
+            ws.onmessage = (event) => {
+              if (cancelled) return;
+              try {
+                setLive(JSON.parse(event.data));
+              } catch (e) { /* malformed frame, ignore */ }
+            };
+            ws.onerror = () => { if (!cancelled) setWsConnected(false); };
+            ws.onclose = () => {
+              if (cancelled) return;
+              setWsConnected(false);
+              // The server runs the simulation itself, so a closed socket means
+              // the instance is restarting (Render free tier sleeps when idle) —
+              // reconnect with backoff instead of telling the visitor to go run
+              // a script. Poll the last saved file meanwhile, if one exists.
+              startPolling();
+              retryId = setTimeout(connect, retryDelay);
+              retryDelay = Math.min(retryDelay * 2, 15000);
+            };
+          } catch (e) {
+            startPolling();
+          }
+        };
+
+        connect();
 
         return () => {
           cancelled = true;
           if (ws) ws.close();
           if (pollId) clearInterval(pollId);
+          if (retryId) clearTimeout(retryId);
         };
       }, []);
 
-      if (err || !live) return (
-        <div style={{ background:'#1A1A1A', border:'1px solid #2A2A2A', borderRadius:12, padding:20, marginBottom:0 }}>
-          <div style={{ display:'flex', alignItems:'center', gap:8, marginBottom:12 }}>
-            <div style={{ width:8, height:8, borderRadius:'50%', background:'#374151' }} />
-            <span style={{ fontFamily:'monospace', fontSize:'0.86rem', color:'#6B7280' }}>Live Agent Feed</span>
-            <span style={{ marginLeft:'auto', color:'#374151', fontSize:'0.74rem', fontFamily:'monospace' }}>○ LAST RUN</span>
+      const status = live && live.status;
+      const hasEvents = live && live.events && live.events.length > 0;
+
+      // Two non-feed states, both brief: waiting for the first frame after page
+      // load, and the server telling us it cannot simulate at all.
+      if (!hasEvents || status === 'unavailable' || status === 'disabled') {
+        const stalled = status === 'unavailable' || status === 'disabled';
+        return (
+          <div style={{ background:'#1A1A1A', border:'1px solid #2A2A2A', borderRadius:12, padding:20, marginBottom:0 }}>
+            <div style={{ display:'flex', alignItems:'center', gap:8, marginBottom:12 }}>
+              <div className={stalled ? '' : 'dot-pulse'} style={{ width:8, height:8, borderRadius:'50%', background: stalled ? '#374151' : '#F59E0B' }} />
+              <span style={{ fontFamily:'monospace', fontSize:'0.86rem', color:'#9CA3AF' }}>Live Agent Feed</span>
+              <span style={{ marginLeft:'auto', color: stalled ? '#374151' : '#F59E0B', fontSize:'0.74rem', fontFamily:'monospace' }}>
+                {stalled ? '○ OFFLINE' : '◌ CONNECTING'}
+              </span>
+            </div>
+            <div style={{ color:'#4B5563', fontSize:'0.8rem', lineHeight:1.8 }}>
+              {stalled
+                ? (live.detail || 'The simulation is not running on this instance.')
+                : 'Starting the simulation — 50 agents are being seeded, first events in a moment.'}
+            </div>
           </div>
-          <div style={{ color:'#4B5563', fontSize:'0.8rem', lineHeight:1.8 }}>
-            No live simulation running.<br />
-            Start one in a terminal: <code style={{ background:'#111', padding:'2px 8px', borderRadius:4, color:'#3B82F6' }}>python simulate_live.py</code>
-          </div>
-        </div>
-      );
+        );
+      }
 
       const st = live.stats || {};
       const events = (live.events || []).slice(0, 30);

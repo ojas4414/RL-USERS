@@ -1,7 +1,9 @@
-import numpy as np
-from sklearn.cluster import KMeans
-from sklearn.preprocessing import StandardScaler
 from collections import defaultdict
+
+# numpy and scikit-learn are imported inside cluster_users/label_clusters rather
+# than here. Only the offline K-means path needs them; the live simulation calls
+# assign_agent_personas, and the deployed gateway image would otherwise have to
+# carry ~100 MB of scikit-learn to import this module.
 
 
 def extract_user_features(pairs: list) -> dict:
@@ -36,6 +38,10 @@ def cluster_users(user_features: dict, n_clusters: int = 3) -> dict:
     Runs K-means on behavioral features to discover natural
     user personas in the data. Returns {user_id: cluster_id}.
     """
+    import numpy as np
+    from sklearn.cluster import KMeans
+    from sklearn.preprocessing import StandardScaler
+
     user_ids = list(user_features.keys())
 
     feature_matrix = np.array([
@@ -63,6 +69,8 @@ def label_clusters(user_clusters: dict, user_features: dict) -> dict:
     average behavioral features — so cluster 0 becomes
     "power_buyer", cluster 1 becomes "browser", etc.
     """
+    import numpy as np
+
     cluster_stats = defaultdict(list)
     for user_id, cluster_id in user_clusters.items():
         cluster_stats[cluster_id].append(

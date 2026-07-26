@@ -24,7 +24,7 @@
 
 RL-USERS simulates a shopping population, not a shopping cart. Each of the 50 agents has a persona (power buyer, average buyer, browser), a wallet, and a reinforcement-learned policy for what to look at next — trained first by behavioral cloning on real purchase sequences, then fine-tuned with PPO. Agents move through a funnel (`browse → product_detail → cart → checkout`), influence their neighbors on a social graph when they buy something, and their *aggregate behavior* — not their individual product choices — is validated against published e-commerce benchmarks.
 
-The simulation streams live: every agent action is published to Redis and Kafka as it happens, a FastAPI gateway forwards it over a WebSocket, and the dashboard updates round by round instead of reading a static report file.
+The simulation streams live: every agent action is published to Redis and Kafka as it happens, a FastAPI gateway forwards it over a WebSocket, and the dashboard updates round by round instead of reading a static report file. The gateway starts the simulation itself on boot (`live/runner.py`) — there is no separate process to launch, on Render or locally.
 
 ## Architecture
 
@@ -57,6 +57,8 @@ The simulation streams live: every agent action is published to Redis and Kafka 
    └─────────────────────────────┘        └─────────────────────────┘
 ```
 
+The simulation loop above (`live/engine.py`) runs two ways depending on topology: the FastAPI gateway starts it on a background thread by default (`live/runner.py`), so the dashboard is live with no setup step; `simulate_live.py` runs the identical loop as a standalone process, for when you want it decoupled from the gateway. Either one publishes to Redis/Kafka when they're reachable and falls back to an in-process queue when they're not.
+
 - **Training** — `agents/bc_trainer.py` imitation-learns from real user sequences; `agents/rl_trainer.py` fine-tunes with PPO, boosting product logits for agents that just received a social signal.
 - **Simulation core** — a min-heap event scheduler, an Erdős–Rényi social graph with BFS influence propagation (`1 / 2^depth` decay), and a topologically-sorted funnel gate, all implemented in Python with C++/pybind11 accelerated equivalents in `agents/cpp/`.
 - **Live infrastructure** — every agent action publishes to Redis (dashboard feed, throttled to ~2 updates/sec for readability) and Kafka (`agent_actions`, full-fidelity event log, retention-capped so a long-running dev session can't fill the disk). Kafka is currently write-only: no consumer exists yet, but the stream is there for future subscribers — e.g. an inventory tracker, an audit log, or another agent reacting to the first 50.
@@ -67,7 +69,7 @@ The simulation streams live: every agent action is published to Redis and Kafka 
 
 - 🧠 **Real RL policy inference**, not scripted behavior — every product choice is a forward pass through a PPO-trained model, with social signals live-boosting the logits of trending products.
 - 🕸️ **Social contagion you can watch happen** — click any node in the dashboard's social graph to see a BFS influence pulse propagate outward in real time, with edges highlighting along the actual propagation path.
-- 📡 **Genuinely live dashboard** — WebSocket-driven, with automatic fallback to the last saved report when no simulation is running.
+- 📡 **Genuinely live dashboard** — WebSocket-driven; the gateway starts the simulation itself on boot, and a fresh instance (e.g. Render waking from a free-tier sleep) just starts a fresh simulation with no manual step.
 - ✅ **Behavioral validation against real data**, not synthetic targets — session length, conversion rate, abandonment, and trend concentration are all benchmarked against published e-commerce numbers.
 - 🐳 **Fully containerized backend** — Redis, Kafka, and four FastAPI microservices behind a gateway, orchestrated with a single `docker-compose up`.
 
@@ -85,7 +87,12 @@ The simulation streams live: every agent action is published to Redis and Kafka 
 python -m venv venv
 venv\Scripts\activate        # Windows
 pip install -r requirements.txt
-pip install torch pandas fastapi uvicorn kafka-python   # not pinned in requirements.txt yet
+```
+
+`requirements.txt` is enough to serve the dashboard and run the live simulation — inference goes through `policy_rl.onnx` (`agents/policy_runtime.py`), not PyTorch, which is what keeps a Render free instance under its 512 MB limit. Training and batch validation (`train.py`, `simulate.py`) still need `torch`, `pandas`, and `scikit-learn`; install those separately if you're doing either:
+
+```bash
+pip install torch pandas scikit-learn
 ```
 
 ### 2. Get the dataset
@@ -102,7 +109,7 @@ data/raw/All_Beauty.jsonl
 docker-compose up -d --build
 ```
 
-This starts Redis, Zookeeper + Kafka, and the four FastAPI microservices behind a gateway on `localhost:8000`.
+This starts Redis, Zookeeper + Kafka, the four FastAPI microservices, and the gateway on `localhost:8000` — the gateway starts the live simulation itself and mirrors it to Redis/Kafka since both are reachable in this topology. Open `http://localhost:8000/` and the dashboard is already live; no extra step needed.
 
 ### 4. Train (optional — a pretrained policy is already checked in)
 
@@ -110,19 +117,27 @@ This starts Redis, Zookeeper + Kafka, and the four FastAPI microservices behind 
 python train.py
 ```
 
-### 5. Run the live simulation
+Training produces `policy_rl.pt` (TorchScript). Regenerate the ONNX file the live path actually runs against with:
+
+```bash
+python scripts/export_onnx.py
+```
+
+### 5. Run the standalone simulation script (optional)
+
+`simulate_live.py` is no longer required to see a live feed — the gateway runs the same loop itself. Run it directly only if you want a simulation independent of the gateway process (e.g. to feed Redis for other consumers, or to confirm the CLI path still matches):
 
 ```bash
 python simulate_live.py
 ```
 
-### 6. Open the dashboard
+### 6. Open the dashboard directly (without docker-compose)
 
 ```bash
-python -m http.server 8080
+python -m uvicorn backend.gateway.main:app --port 8000
 ```
 
-Visit `http://localhost:8080/visuals/dashboard.html`. It shows `○ LAST RUN` with the last saved report until the simulation is running, then flips to `● LIVE` and updates in real time.
+Visit `http://localhost:8000/`. With no Redis or Kafka configured, the gateway falls back to an in-process event queue — same feed, no broker required. It shows a brief `◌ CONNECTING` state while the first agents are seeded, then `● LIVE` and updates in real time.
 
 ## Validation results
 
@@ -137,13 +152,17 @@ Visit `http://localhost:8080/visuals/dashboard.html`. It shows `○ LAST RUN` wi
 
 ```
 agents/          persona/agent model, BFS social graph, funnel gate, scheduler, BC + PPO trainers, C++ core
+                 policy_runtime.py: torch-free (ONNX) inference used by the live path
 backend/         FastAPI gateway + product/cart/order/session microservices
-comms/           Redis and Kafka client helpers
+comms/           Redis and Kafka client helpers (both optional — see live/runner.py)
 data/            data loading, persona clustering, social graph builder
+live/            the live simulation loop (engine.py), its in-process fan-out (bus.py),
+                 and the background runner the gateway starts on boot (runner.py)
 validation/      behavioral metrics + benchmark verdicts
 visuals/         live dashboard (static HTML) and Vite/React dashboard
+scripts/         export_onnx.py (policy_rl.pt → policy_rl.onnx) and check_parity.py
 simulate.py      one-shot batch simulation → validation_report.json
-simulate_live.py continuous simulation → Redis/Kafka live stream
+simulate_live.py continuous simulation → Redis/Kafka live stream (standalone; optional)
 train.py         BC + PPO training entry point
 docker-compose.yml   Redis, Kafka, and the microservice cluster
 ```

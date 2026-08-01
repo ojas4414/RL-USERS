@@ -2,7 +2,12 @@
 __pycache__/
 *.pyc
 venv/
+.venv/
+env/
 *.egg-info/
+
+# Packaged release archives (built, not source)
+funnelforge-*.zip
 
 # Node / frontend
 node_modules/

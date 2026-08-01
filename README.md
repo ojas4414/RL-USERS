@@ -8,7 +8,7 @@
 
 [![Python](https://img.shields.io/badge/Python-3.11-3776AB?logo=python&logoColor=white)](https://www.python.org/)
 [![PyTorch](https://img.shields.io/badge/PyTorch-BC%20%2B%20PPO-EE4C2C?logo=pytorch&logoColor=white)](https://pytorch.org/)
-[![C++](https://img.shields.io/badge/C%2B%2B17-pybind11-00599C?logo=cplusplus&logoColor=white)](https://isocpp.org/)
+[![C++](https://img.shields.io/badge/C%2B%2B17-pybind11%20ports%20(not%20wired%20in)-00599C?logo=cplusplus&logoColor=white)](https://isocpp.org/)
 [![FastAPI](https://img.shields.io/badge/FastAPI-microservices-009688?logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com/)
 [![Redis](https://img.shields.io/badge/Redis-pub%2Fsub-DC382D?logo=redis&logoColor=white)](https://redis.io/)
 [![Kafka](https://img.shields.io/badge/Apache%20Kafka-event%20stream-231F20?logo=apachekafka&logoColor=white)](https://kafka.apache.org/)
@@ -43,7 +43,7 @@ The simulation streams live: every agent action is published to Redis and Kafka 
    │                    simulate_live.py                          │
    │  50 agents · heap scheduler · BFS social propagation ·       │
    │  topological funnel gate · persona-driven budgets/quit rates │
-   │  (C++ / pybind11 accelerated core: agents/cpp/)               │
+   │  (pure Python; C++ ports exist in agents/cpp/, unused)        │
    └───────┬──────────────────────────────────────────┬──────────┘
            │ publish per event                          │ publish per event
    ┌───────▼────────┐                           ┌───────▼────────┐
@@ -60,7 +60,7 @@ The simulation streams live: every agent action is published to Redis and Kafka 
 The simulation loop above (`live/engine.py`) runs two ways depending on topology: the FastAPI gateway starts it on a background thread by default (`live/runner.py`), so the dashboard is live with no setup step; `simulate_live.py` runs the identical loop as a standalone process, for when you want it decoupled from the gateway. Either one publishes to Redis/Kafka when they're reachable and falls back to an in-process queue when they're not.
 
 - **Training** — `agents/bc_trainer.py` imitation-learns from real user sequences; `agents/rl_trainer.py` fine-tunes with PPO, boosting product logits for agents that just received a social signal.
-- **Simulation core** — a min-heap event scheduler, an Erdős–Rényi social graph with BFS influence propagation (`1 / 2^depth` decay), and a topologically-sorted funnel gate, all implemented in Python with C++/pybind11 accelerated equivalents in `agents/cpp/`.
+- **Simulation core** — a min-heap event scheduler, an Erdős–Rényi social graph with BFS influence propagation (`1 / 2^depth` decay), and a topologically-sorted funnel gate. All three run in **pure Python**; `agents/cpp/` holds C++/pybind11 ports of the same algorithms written alongside them, but **nothing in the runtime imports or builds them** — they are not currently wired into the execution path and do not accelerate anything today.
 - **Live infrastructure** — every agent action publishes to Redis (dashboard feed, throttled to ~2 updates/sec for readability) and Kafka (`agent_actions`, full-fidelity event log, retention-capped so a long-running dev session can't fill the disk). Kafka is currently write-only: no consumer exists yet, but the stream is there for future subscribers — e.g. an inventory tracker, an audit log, or another agent reacting to the first 50.
 - **Backend** — a FastAPI gateway fronting `product_service`, `cart_service`, `order_service`, and `session_service`, each with its own Redis-backed state.
 - **Validation** — session length, conversion rate, cart abandonment, and social influence concentration, each checked against real industry benchmarks with a PASS/FAIL verdict.
@@ -89,10 +89,10 @@ venv\Scripts\activate        # Windows
 pip install -r requirements.txt
 ```
 
-`requirements.txt` is enough to serve the dashboard and run the live simulation — inference goes through `policy_rl.onnx` (`agents/policy_runtime.py`), not PyTorch, which is what keeps a Render free instance under its 512 MB limit. Training and batch validation (`train.py`, `simulate.py`) still need `torch`, `pandas`, and `scikit-learn`; install those separately if you're doing either:
+`requirements.txt` is enough to serve the dashboard and run the live simulation — inference goes through `policy_rl.onnx` (`agents/policy_runtime.py`), not PyTorch, which is what keeps a Render free instance under its 512 MB limit. Training and batch validation (`train.py`, `simulate.py`) still need `torch`, `pandas`, `scikit-learn`, and `requests`; install those separately if you're doing either:
 
 ```bash
-pip install torch pandas scikit-learn
+pip install torch pandas scikit-learn requests
 ```
 
 ### 2. Get the dataset
@@ -141,17 +141,80 @@ Visit `http://localhost:8000/`. With no Redis or Kafka configured, the gateway f
 
 ## Validation results
 
-| Metric | Industry benchmark | Simulated | Verdict |
+Regenerated from a fresh `python simulate.py` run. Every number below comes from
+the committed [`validation_report.json`](validation_report.json) — nothing here
+is hand-entered.
+
+| Metric | Benchmark | Simulated | Verdict |
 |---|---|---|---|
-| Session length | ~8 items/session | 9.5 ± 10.8 | ✅ PASS |
-| Conversion rate | 2–20% | ~16% | ✅ PASS |
-| Cart abandonment | 60–95% | ~84% | ✅ PASS |
-| Social influence (top-5 concentration) | 20–40% | ~3–15% | ⚠️ Below target — catalog diversity (2,985 products) spreads purchases more than a single trend event would |
+| Session length | within 4.0 items of the real mean (8.16) | 4.74 ± 5.16 | ✅ PASS (margin 3.4 of 4.0) |
+| Conversion rate | 2–5% (industry e-commerce) | 10.0% | ❌ **FAIL** — roughly 2× the top of the range |
+| Non-converting sessions | — | 90.0% | ⚪ **Not scored** — see below |
+| Social influence (top-5 concentration) | 0.20–0.40 (power-law, Amazon trend data) | 0.043 | ❌ **FAIL** — catalog diversity (2,985 products) spreads purchases far more than a trend event would |
+
+**Three corrections were needed to produce this table honestly:**
+
+1. **The benchmark ranges had drifted apart in code.** Each metric defined its
+   range in three separate places — the string written into the JSON, the numeric
+   threshold in the verdict, and the label in the printed summary. Conversion was
+   documented as `2-5%`, scored against `0.02 <= x <= 0.20`, and printed as
+   `2-20%`. A 16% result was consequently recorded as a **PASS against a stated
+   2–5% benchmark**. All three now derive from one `BENCHMARKS` dict in
+   `validation/metrics.py`; if a run falls outside a range it fails, and the
+   range does not move.
+
+2. **"Cart abandonment" was never an independent metric.** It is the fraction of
+   sessions with no `checkout`, which is exactly `1 − conversion_rate` by
+   construction — the two summed to 1.000 in every run. Industry cart
+   abandonment (~70%) is measured over sessions that *created a cart*, a
+   different denominator that excludes browse-only sessions. Scoring one against
+   the other compares different quantities, so it is now reported but
+   deliberately left unscored rather than counted as a third PASS.
+
+3. **The previously published numbers do not reproduce.** The old table's
+   9.5 ± 10.8 session length and ~16% conversion do not appear in any run; the
+   simulation is unseeded (see below), and observed ranges are far from those
+   figures.
+
+### Run-to-run variance
+
+`simulate.py` calls no `random.seed()`, so consecutive runs of identical code
+differ substantially. Five runs:
+
+| Run | Session length (sim) | Conversion | Top-5 concentration |
+|---|---|---|---|
+| 1 | 7.40 | 14.0% | 0.033 |
+| 2 | — | 10.0% | 0.040 |
+| 3 | 6.88 | 6.0% | 0.032 |
+| 4 | 6.04 | 10.0% | 0.040 |
+| 5 | 5.70 | 12.0% | 0.047 |
+
+Conversion spans **6.0%–14.0%** across runs — a factor of more than two. Any
+single quoted conversion figure, including the 10.0% in the table above, should
+be read as one draw from that spread rather than a stable property of the model.
+Seeding the simulation is the obvious fix and is listed under Known Gaps.
+
+### Known gaps in the validation path
+
+- **The budget constraint never binds.** `simulate.py` prices products via
+  `GET {gateway}/products/{id}`, but the gateway exposes no such route — only
+  `/products` (the full list). Every lookup 404s, `get_price()` returns its
+  `0.0` default, and `can_afford(0.0)` is always true. This holds with
+  `docker-compose` fully up. Running `product_service` directly so the route
+  resolves does not fix it either: its catalog is the top 500 products while the
+  policy vocabulary is 2,985, so only **224 items (7.5%)** have a price at all.
+  Purchases in every run above were effectively unconstrained by budget.
+- **The simulation is unseeded**, so no run is reproducible.
+- **The C++ ports in `agents/cpp/` are not built or imported** by anything at
+  runtime, and `agent_inference_engine.cpp` does not currently compile.
 
 ## Repo layout
 
 ```
-agents/          persona/agent model, BFS social graph, funnel gate, scheduler, BC + PPO trainers, C++ core
+agents/          persona/agent model, BFS social graph, funnel gate, scheduler, BC + PPO trainers
+                 cpp/: C++/pybind11 ports of the scheduler, social graph, funnel and a
+                 libtorch inference engine — written alongside the Python, not built or
+                 imported by anything at runtime (see Known Gaps)
                  policy_runtime.py: torch-free (ONNX) inference used by the live path
 backend/         FastAPI gateway + product/cart/order/session microservices
 comms/           Redis and Kafka client helpers (both optional — see live/runner.py)

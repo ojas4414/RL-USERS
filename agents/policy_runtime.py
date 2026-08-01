@@ -11,9 +11,15 @@ embeddings, 2 transformer encoder layers) exported to ONNX by
 scripts/export_onnx.py, which asserts logit parity against the .pt file as part
 of the export. onnxruntime executes it in ~30 MB.
 
-The backend preference mirrors the C++/Python fallback already used by
-scheduler.py and social_graph.py: the lighter path wins when it is importable,
-the original is the fallback, and the numbers are the same either way.
+The backend preference works the way you would expect: the lighter path
+(onnxruntime) wins when it is importable, the TorchScript model is the fallback,
+and the numbers are the same either way -- scripts/check_parity.py verifies that
+the two select products identically, not just that the logits match.
+
+(An earlier version of this docstring described this as mirroring "the C++/Python
+fallback already used by scheduler.py and social_graph.py". No such fallback
+exists: both of those modules are pure Python and never attempt a C++ import.
+The C++ ports in agents/cpp/ are not wired into the runtime.)
 """
 import os
 import random as _random

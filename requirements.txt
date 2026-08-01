@@ -15,8 +15,13 @@ kafka-python
 networkx
 matplotlib
 
-# Development only — training (train.py), batch validation (simulate.py) and
-# regenerating policy_rl.onnx (scripts/export_onnx.py). Not needed to serve.
+# Development only — training (train.py) and batch validation (simulate.py).
+# Not needed to serve the dashboard or run the live simulation.
+#   torch           train.py, agents/bc_trainer.py, agents/rl_trainer.py, simulate.py
+#   pandas          data/loader.py, data/graph_builder.py
+#   scikit-learn    data/persona_cluster.py
+#   requests        simulate.py (calls the microservices over HTTP)
 # torch
 # pandas
 # scikit-learn
+# requests

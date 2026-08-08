@@ -9,6 +9,7 @@ import {
   CheckCircle2,
   Database,
   GitBranch,
+  MinusCircle,
   Network,
   ShoppingBag,
   Users,
@@ -25,6 +26,7 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
+import report from "../validation_report.json";
 
 const COLORS = {
   background: "#0F0F0F",
@@ -66,73 +68,115 @@ const personaProfiles = {
   },
 };
 
-const sessionLengths = [
-  2, 3, 5, 1, 8, 12, 3, 25, 4, 2, 6, 18, 1, 3, 7, 4, 15, 2, 9, 3, 1, 6, 4,
-  22, 3, 8, 5, 1, 4, 11, 2, 7, 3, 19, 4, 6, 2, 8, 1, 5, 3, 14, 2, 6, 4, 3,
-  9, 2, 5, 1,
+// Everything below is derived from validation_report.json, never typed in.
+// These arrays used to be hand-written sample data, which is how this app
+// ended up rendering a 20% conversion rate as a PASS -- and histogram buckets
+// matching neither the real nor the simulated distribution -- long after the
+// report said otherwise. Vite resolves the import at build time, so
+// regenerating the report and restarting `npm run dev` is enough to refresh
+// every number on the page.
+//
+// visuals/dashboard.html is the deployed dashboard and fetches the same file
+// at runtime. Both read one source; neither restates it.
+
+const sessionLengths = report.sim_session_lengths;
+
+const BUCKETS = [
+  { bucket: "1-5", test: (n) => n <= 5 },
+  { bucket: "6-10", test: (n) => n > 5 && n <= 10 },
+  { bucket: "11-15", test: (n) => n > 10 && n <= 15 },
+  { bucket: "16-20", test: (n) => n > 15 && n <= 20 },
+  { bucket: "21+", test: (n) => n > 20 },
 ];
 
-const histogramData = [
-  { bucket: "1-5", real: 34, simulated: 31 },
-  { bucket: "6-10", real: 9, simulated: 11 },
-  { bucket: "11-15", real: 4, simulated: 4 },
-  { bucket: "16-20", real: 2, simulated: 2 },
-  { bucket: "21+", real: 1, simulated: 2 },
-];
-
-const trendingProducts = [
-  { asin: "B085BB7B1M", interactions: 47 },
-  { asin: "B07XJ8C8F5", interactions: 31 },
-  { asin: "B00YQ6X8EO", interactions: 28 },
-  { asin: "B09Z9876CD", interactions: 19 },
-  { asin: "B08BZ63GMJ", interactions: 14 },
-  { asin: "B01M5KNSQN", interactions: 11 },
-  { asin: "B097R46CSY", interactions: 8 },
-  { asin: "B099DRHW5V", interactions: 6 },
-  { asin: "B08BBQ29N5", interactions: 5 },
-  { asin: "B01CUPMQZE", interactions: 4 },
-].map((product) => ({
-  ...product,
-  label: product.asin.slice(-6),
+const histogramData = BUCKETS.map(({ bucket, test }) => ({
+  bucket,
+  real: report.real_session_lengths.filter(test).length,
+  simulated: report.sim_session_lengths.filter(test).length,
 }));
+
+const trendingProducts = report.trending_products.map(({ product, count }) => ({
+  asin: product,
+  interactions: count,
+  label: product.slice(-6),
+}));
+
+// NOT_COMPARABLE is a third state, not a failure: abandonment is 1 -
+// conversion by construction, so the report declines to score it rather than
+// claiming a result it cannot support. Rendering that as FAIL would assert
+// exactly what the report is refusing to.
+const STATUS = {
+  PASS: { label: "PASS", icon: CheckCircle2 },
+  FAIL: { label: "FAIL", icon: AlertTriangle },
+  NOT_COMPARABLE: { label: "UNSCORED", icon: MinusCircle },
+};
+
+const verdictOf = (key) => STATUS[report[key]?.verdict] || STATUS.FAIL;
+
+// The benchmark strings carry trailing caveat prose in the report ("... --
+// NOT APPLICABLE, see note"); keep the range and let the badge and tooltip
+// carry the caveat, exactly as dashboard.html does.
+const benchOf = (key, fallback) => {
+  const raw = report[key]?.real_benchmark || fallback;
+  return raw ? String(raw).split(" -- ")[0].split(" (")[0] : raw;
+};
+
+const pct = (value) => `${((value || 0) * 100).toFixed(1)}%`;
 
 const validationMetrics = [
   {
     name: "Session Length",
-    benchmark: "~8",
-    simulated: "9.54 +/- 10.81",
-    status: "PASS",
-    icon: CheckCircle2,
+    benchmark: report.session_length?.tolerance,
+    simulated: `${report.session_length?.simulated?.mean?.toFixed(2)} +/- ${report.session_length?.simulated?.std?.toFixed(2)}`,
+    status: verdictOf("session_length").label,
+    icon: verdictOf("session_length").icon,
   },
   {
     name: "Conversion Rate",
-    benchmark: "2-20%",
-    simulated: "20%",
-    status: "PASS",
-    icon: CheckCircle2,
+    benchmark: benchOf("conversion_rate"),
+    simulated: pct(report.conversion_rate?.simulated),
+    status: verdictOf("conversion_rate").label,
+    icon: verdictOf("conversion_rate").icon,
+    tooltip:
+      "Agents check out well above the industry range. Budget enforcement is silently disabled by a 404ing price lookup -- see the README's known-limitations section.",
   },
   {
     name: "Abandonment Rate",
-    benchmark: "70-85%",
-    simulated: "80%",
-    status: "PASS",
-    icon: CheckCircle2,
+    benchmark: benchOf("abandonment_rate"),
+    simulated: pct(report.abandonment_rate?.simulated),
+    status: verdictOf("abandonment_rate").label,
+    icon: verdictOf("abandonment_rate").icon,
+    tooltip: report.abandonment_rate?.note,
   },
   {
     name: "Social Influence",
-    benchmark: "0.20-0.40",
-    simulated: "0.033",
-    status: "FAIL",
-    icon: AlertTriangle,
+    benchmark: benchOf("social_influence_coefficient"),
+    simulated: report.social_influence_coefficient?.simulated?.toFixed(3),
+    status: verdictOf("social_influence_coefficient").label,
+    icon: verdictOf("social_influence_coefficient").icon,
     tooltip:
-      "Gateway catalog fallback limited product diversity. Known limitation - not a modeling failure.",
+      "Purchases spread thinly across the full catalog instead of concentrating in a trending head.",
   },
 ];
+
+const scoreline = (() => {
+  const tally = validationMetrics.reduce((acc, m) => {
+    acc[m.status] = (acc[m.status] || 0) + 1;
+    return acc;
+  }, {});
+  return [
+    tally.PASS ? `${tally.PASS} PASS` : null,
+    tally.FAIL ? `${tally.FAIL} FAIL` : null,
+    tally.UNSCORED ? `${tally.UNSCORED} unscored` : null,
+  ]
+    .filter(Boolean)
+    .join(" / ");
+})();
 
 const metricTiles = [
   { value: "701K", label: "Amazon reviews", icon: Database },
   { value: "50", label: "Simulated agents", icon: Users },
-  { value: "3 PASS / 1 FAIL", label: "Behavioral metrics", icon: Activity },
+  { value: scoreline, label: "Behavioral metrics", icon: Activity },
   { value: "BFS + Heap + Topo Sort", label: "CS algorithms", icon: GitBranch },
 ];
 
@@ -617,7 +661,15 @@ function MetricsTable() {
     <div className="space-y-3">
       {validationMetrics.map((metric) => {
         const Icon = metric.icon;
-        const isPass = metric.status === "PASS";
+        // Three states. UNSCORED is not a failure -- abandonment is excluded
+        // from scoring because it is 1 - conversion by construction, so
+        // styling it as FAIL would assert something the report does not.
+        const badgeClass =
+          {
+            PASS: "border-emerald-500/30 bg-emerald-500/10 text-emerald-300",
+            UNSCORED: "border-zinc-600/40 bg-zinc-500/10 text-zinc-400",
+          }[metric.status] ||
+          "border-amber-500/35 bg-amber-500/10 text-amber-300";
 
         return (
           <div
@@ -633,11 +685,7 @@ function MetricsTable() {
             </div>
             <div className="relative inline-flex w-fit items-center gap-1.5">
               <span
-                className={`inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1 font-mono text-xs font-semibold ${
-                  isPass
-                    ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-300"
-                    : "border-amber-500/35 bg-amber-500/10 text-amber-300"
-                }`}
+                className={`inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1 font-mono text-xs font-semibold ${badgeClass}`}
               >
                 <Icon className="h-3.5 w-3.5" />
                 {metric.status}
@@ -734,8 +782,14 @@ function SessionLengthChart() {
         </ResponsiveContainer>
       </div>
       <div className="mt-3 grid grid-cols-2 gap-2 font-mono text-xs text-zinc-500">
-        <span>Real mean 8.16, std 7.08</span>
-        <span className="text-right">Sim mean 9.54, std 10.81</span>
+        <span>
+          Real mean {report.session_length?.real?.mean?.toFixed(2)}, std{" "}
+          {report.session_length?.real?.std?.toFixed(2)}
+        </span>
+        <span className="text-right">
+          Sim mean {report.session_length?.simulated?.mean?.toFixed(2)}, std{" "}
+          {report.session_length?.simulated?.std?.toFixed(2)}
+        </span>
       </div>
     </SectionPanel>
   );

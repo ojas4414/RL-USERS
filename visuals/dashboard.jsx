@@ -1035,8 +1035,8 @@ function ArchitectureDiagram() {
         ))}
       </div>
       <div className="mt-4 grid gap-2 font-mono text-xs text-zinc-500 sm:grid-cols-4">
-        <span>Amazon Data: reviews -> products</span>
-        <span>BC Training: imitation -> policy</span>
+        <span>Amazon Data: reviews {"->"} products</span>
+        <span>BC Training: imitation {"->"} policy</span>
         <span>50 Agents: heap + BFS + topo</span>
         <span>Validation: session + conversion + abandonment</span>
       </div>

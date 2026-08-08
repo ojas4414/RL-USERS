@@ -287,21 +287,44 @@
     /* ── Metrics Panel ── */
     const MetricsPanel = ({ data }) => {
       const [hov, setHov] = useState(null);
+      // Benchmark strings come from the report, never from a literal here. They
+      // used to be hardcoded, which is how this panel ended up advertising
+      // "2-20%" for conversion long after validation/metrics.py had been
+      // corrected to 2-5% — the same drift the BENCHMARKS dict exists to stop.
+      // The abandonment benchmark carries its own caveat prose ("... -- NOT
+      // APPLICABLE, see note"), which does not fit a narrow monospace column.
+      // Keep the range, drop the commentary: the UNSCORED badge and its
+      // tooltip are what actually carry the caveat.
+      const bench = (m, fallback) => {
+        const raw = data[m]?.real_benchmark || data[m]?.tolerance || fallback;
+        return raw ? String(raw).split(' -- ')[0].split(' (')[0] : raw;
+      };
       const rows = [
-        { key: 'session_length', label: 'Session Length', bench: '~8 items',
+        { key: 'session_length', label: 'Session Length', bench: bench('session_length', '~8 items'),
           sim: `${data.session_length?.simulated?.mean?.toFixed(1)} +/- ${data.session_length?.simulated?.std?.toFixed(1)}`,
           verdict: data.session_length?.verdict },
-        { key: 'conversion_rate', label: 'Purchase Rate', bench: '2-20%',
+        { key: 'conversion_rate', label: 'Purchase Rate', bench: bench('conversion_rate'),
           sim: `${((data.conversion_rate?.simulated || 0)*100).toFixed(1)}%`,
           verdict: data.conversion_rate?.verdict },
-        { key: 'abandonment_rate', label: 'Cart Abandonment', bench: '60-95%',
+        { key: 'abandonment_rate', label: 'Cart Abandonment', bench: bench('abandonment_rate'),
           sim: `${((data.abandonment_rate?.simulated || 0)*100).toFixed(1)}%`,
-          verdict: data.abandonment_rate?.verdict },
-        { key: 'social', label: 'Trend Concentration', bench: '20-40%',
+          verdict: data.abandonment_rate?.verdict,
+          note: data.abandonment_rate?.note },
+        { key: 'social', label: 'Trend Concentration', bench: bench('social_influence_coefficient'),
           sim: `${((data.social_influence_coefficient?.simulated || 0)*100).toFixed(1)}%`,
           verdict: data.social_influence_coefficient?.verdict,
           note: 'With 2,985 real Amazon products, purchases spread across many items. Known limitation — not a modeling failure.' },
       ];
+      // Three states, not two. Abandonment is reported as NOT_COMPARABLE
+      // because it is 1 - conversion by construction and so cannot be scored
+      // against an industry range measured over a different denominator;
+      // collapsing that to "FAIL" would assert a failure the report is
+      // explicitly declining to claim.
+      const BADGE = {
+        PASS:           { text: 'PASS',     fg: S.green, bg: '#052e16', line: '#166534' },
+        FAIL:           { text: 'FAIL',     fg: S.amber, bg: '#2c1a00', line: '#92400e' },
+        NOT_COMPARABLE: { text: 'UNSCORED', fg: S.muted, bg: '#161616', line: S.border },
+      };
       return (
         <div style={card()}>
           <h3 style={{ fontFamily: 'monospace', fontSize: '1rem', marginBottom: 16 }}>Behavioral Metrics</h3>
@@ -312,10 +335,10 @@
               <div style={{ flex: 1.8, fontFamily: 'monospace', fontSize: '0.86rem' }}>{m.sim}</div>
               <div style={{ position: 'relative', flexShrink: 0 }}>
                 <span
-                  style={{ background: m.verdict==='PASS'?'#052e16':'#2c1a00', color: m.verdict==='PASS'?S.green:S.amber, border:`1px solid ${m.verdict==='PASS'?'#166534':'#92400e'}`, padding:'3px 10px', borderRadius:20, fontSize:'0.72rem', fontFamily:'monospace', fontWeight:700, cursor: m.note?'help':'default', whiteSpace:'nowrap' }}
+                  style={{ background: (BADGE[m.verdict]||BADGE.FAIL).bg, color: (BADGE[m.verdict]||BADGE.FAIL).fg, border:`1px solid ${(BADGE[m.verdict]||BADGE.FAIL).line}`, padding:'3px 10px', borderRadius:20, fontSize:'0.72rem', fontFamily:'monospace', fontWeight:700, cursor: m.note?'help':'default', whiteSpace:'nowrap' }}
                   onMouseEnter={() => m.note && setHov(m.key)}
                   onMouseLeave={() => setHov(null)}
-                >{m.verdict==='PASS'?'PASS':'FAIL'}</span>
+                >{(BADGE[m.verdict]||BADGE.FAIL).text}</span>
                 {hov===m.key && (
                   <div style={{ position:'absolute', right:0, top:'110%', zIndex:30, background:'#0A0A0A', border:`1px solid ${S.amber}`, borderRadius:8, padding:'10px 14px', width:250, fontSize:'0.76rem', color:'#D1D5DB', lineHeight:1.6 }}>{m.note}</div>
                 )}
